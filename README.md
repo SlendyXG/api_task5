@@ -30,7 +30,7 @@ pip install -r requirements.txt
 ### Scripts Usage Examples
 #### Run Full Analysis
 ```
-Run analysis for all supported languages (Python, Java, JavaScript, Ruby, PHP, C++, C#, CSS)
+# Run analysis for all supported languages (Python, Java, JavaScript, Ruby, PHP, C++, C#, CSS)
 python main.py
 ```
 
