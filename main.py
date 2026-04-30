@@ -3,72 +3,67 @@ import time
 import re
 
 import requests
-from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from terminaltables import AsciiTable
 
 
-def parse_salary_from_text(salary_text):
-    if not salary_text:
-        return None
-
-    salary_text = salary_text.replace(' ', '').replace(' ', '')
-    salary_text = salary_text.replace('₽', '').replace('руб.', '').strip()
-    numbers = re.findall(r'\d+', salary_text)
-    numbers = [int(n) for n in numbers]
-
-    if not numbers:
-        return None
-
-    if len(numbers) == 1:
-        if 'до' in salary_text.lower():
-            return int(numbers[0] * 0.8)
-        else:
-            return int(numbers[0] * 1.2)
+def calculate_expected_salary(salary_from, salary_to):
+    if salary_from and salary_to:
+        return (salary_from + salary_to) / 2
+    elif salary_from and not salary_to:
+        return salary_from * 1.2
+    elif not salary_from and salary_to:
+        return salary_to * 0.8
     else:
-        return int((numbers[0] + numbers[1]) / 2)
+        return None
 
 
-def get_all_vacancy_ids_by_language(language):
+def get_salary_from_api(vacancy):
+    salary = vacancy.get('salary') or vacancy.get('predictedSalary')
+
+    if not salary:
+        return None
+
+    salary_from = salary.get('from')
+    salary_to = salary.get('to')
+    currency = salary.get('currency', 'RUR')
+
+    if currency != 'RUR':
+        return None
+
+    return calculate_expected_salary(salary_from, salary_to)
+
+
+def get_all_vacancies_by_language(language):
     url = 'https://career.habr.com/api/frontend/vacancies'
-    vacancy_ids = []
+    all_vacancies = []
     page = 1
     total_pages = 1
+    vacancies_found = 0
 
     while page <= total_pages:
         params = {'q': language, 'page': page}
         response = requests.get(url, params=params)
+        response.raise_for_status()
         data = response.json()
 
         if page == 1:
             total_pages = data.get('meta', {}).get('totalPages', 1)
+            vacancies_found = data.get('meta', {}).get('totalResults', 0)
 
-        for vacancy in data.get('list', []):
-            vacancy_ids.append(vacancy['id'])
-
+        all_vacancies.extend(data.get('list', []))
         page += 1
         time.sleep(0.1)
 
-    return vacancy_ids
-
-
-def get_salary_from_vacancy_page(vacancy_id):
-    url = f'https://career.habr.com/vacancies/{vacancy_id}'
-    response = requests.get(url)
-    soup = BeautifulSoup(response.text, 'html.parser')
-    salary_block = soup.find('div', class_='basic-salary')
-    if salary_block:
-        return parse_salary_from_text(salary_block.get_text(strip=True))
-    return None
+    return all_vacancies, vacancies_found
 
 
 def get_habr_stats(language):
-    vacancy_ids = get_all_vacancy_ids_by_language(language)
-    vacancies_found = len(vacancy_ids)
-
+    vacancies, vacancies_found = get_all_vacancies_by_language(language)
     salaries = []
 
-    for vac_id in vacancy_ids[:min(100, len(vacancy_ids))]:
-        salary = get_salary_from_vacancy_page(vac_id)
+    for vacancy in vacancies[:min(100, len(vacancies))]:
+        salary = get_salary_from_api(vacancy)
         if salary:
             salaries.append(salary)
         time.sleep(0.2)
@@ -86,18 +81,7 @@ def get_habr_stats(language):
 def predict_rub_salary_for_superjob(vacancy):
     payment_from = vacancy.get('payment_from')
     payment_to = vacancy.get('payment_to')
-
-    if not payment_from and not payment_to:
-        return None
-
-    if payment_from and payment_to:
-        return (payment_from + payment_to) / 2
-    elif payment_from and not payment_to:
-        return payment_from * 1.2
-    elif not payment_from and payment_to:
-        return payment_to * 0.8
-
-    return None
+    return calculate_expected_salary(payment_from, payment_to)
 
 
 def get_superjob_stats(secret_key, language, town_id=4):
@@ -118,6 +102,7 @@ def get_superjob_stats(secret_key, language, town_id=4):
         }
 
         response = requests.get(url, headers=headers, params=params)
+        response.raise_for_status()
         data = response.json()
 
         if page == 0:
@@ -145,17 +130,20 @@ def get_superjob_stats(secret_key, language, town_id=4):
 
 
 def print_table(title, data):
-    print(f"\n{title}")
-    print("+" + "-" * 20 + "+" + "-" * 16 + "+" + "-" * 19 + "+" + "-" * 16 + "+")
-    print(
-        f"| {'Язык программирования':<18} | {'Найдено вакансий':<14} | {'Обработано вакансий':<17} | {'Средняя зарплата':<14} |")
-    print("+" + "-" * 20 + "+" + "-" * 16 + "+" + "-" * 19 + "+" + "-" * 16 + "+")
+    table_data = [
+        ['Язык программирования', 'Найдено вакансий', 'Обработано вакансий', 'Средняя зарплата']
+    ]
 
     for lang, stats in data.items():
-        print(
-            f"| {lang:<18} | {stats['vacancies_found']:<14} | {stats['vacancies_processed']:<17} | {stats['average_salary'] or 'N/A':<14} |")
+        table_data.append([
+            lang,
+            str(stats['vacancies_found']),
+            str(stats['vacancies_processed']),
+            str(stats['average_salary'] or 'N/A')
+        ])
 
-    print("+" + "-" * 20 + "+" + "-" * 16 + "+" + "-" * 19 + "+" + "-" * 16 + "+" + "\n")
+    table = AsciiTable(table_data, title)
+    print(table.table)
 
 
 def main():
